@@ -88,7 +88,7 @@ const storageKeys = {
   orders: "kryonOrders",
   theme: "kryonTheme",
   session: "kryonSession",
-  emailOutbox: "kryonEmailOutbox"
+  cart: "kryonCart"
 };
 
 const defaultProfile = {
@@ -108,7 +108,8 @@ const revealObserver = new IntersectionObserver(
   entries => {
     entries.forEach(entry => {
       if (entry.isIntersecting) {
-        entry.target.classList.add("visible");
+        entry.target?.classList.add("visible");
+        revealObserver.unobserve(entry.target);
       }
     });
   },
@@ -118,6 +119,7 @@ const revealObserver = new IntersectionObserver(
 document.querySelectorAll(".reveal").forEach(element => revealObserver.observe(element));
 
 const productView = document.querySelector(".product-view");
+const progressBar = document.querySelector(".progress");
 const productRender = document.querySelector(".product-render");
 const productAura = document.querySelector(".product-aura");
 const cartView = document.querySelector(".cart-view");
@@ -144,28 +146,51 @@ const confirmationTotal = document.getElementById("confirmation-total");
 const confirmationCopy = document.getElementById("confirmation-copy");
 const otpPanel = document.getElementById("otp-panel");
 const otpStatus = document.getElementById("otp-status");
-const cart = {};
+
+const cart = JSON.parse(localStorage.getItem(storageKeys.cart) || "{}");
+
 let checkoutMode = "guest";
 let otpCode = "";
 let otpSent = false;
+let otpCreatedAt = 0;
 
+function saveCart() {
+  localStorage.setItem(storageKeys.cart, JSON.stringify(cart));
+}
 function loadProfile() {
-  return { ...defaultProfile, ...JSON.parse(localStorage.getItem(storageKeys.profile) || "{}") };
+  return {
+    ...defaultProfile,
+    ...JSON.parse(localStorage.getItem(storageKeys.profile) || "{}")
+  };
 }
 
 let profile = loadProfile();
 
 function saveProfile(nextProfile) {
-  profile = { ...defaultProfile, ...nextProfile };
-  localStorage.setItem(storageKeys.profile, JSON.stringify(profile));
-  localStorage.setItem(storageKeys.session, profile.email ? "active" : "guest");
+  profile = {
+    ...defaultProfile,
+    ...nextProfile
+  };
+
+  localStorage.setItem(
+    storageKeys.profile,
+    JSON.stringify(profile)
+  );
+
+  localStorage.setItem(
+    storageKeys.session,
+    profile.email ? "active" : "guest"
+  );
   applyProfile();
 }
 
 function formatPrice(value, currency = profile.currency) {
   const config = currencyRates[currency] || currencyRates.USD;
+
   const converted = value * config.rate;
-  const rounded = currency === "USD" ? Math.round(converted) : Math.round(converted);
+
+  const rounded = Math.round(converted);
+
   return `${config.symbol}${rounded.toLocaleString(config.locale)}`;
 }
 
@@ -174,42 +199,35 @@ function getCartEntries() {
 }
 
 function getCartTotal(entries = getCartEntries()) {
-  return entries.reduce((sum, [key, quantity]) => sum + products[key].price * quantity, 0);
+  return entries.reduce(
+    (sum, [key, quantity]) =>
+      sum + products[key].price * quantity,
+    0
+  );
 }
 
 function createOrderId() {
   const stamp = Date.now().toString().slice(-6);
-  const suffix = Math.random().toString(36).slice(2, 5).toUpperCase();
+
+  const suffix = Math.random()
+    .toString(36)
+    .slice(2, 5)
+    .toUpperCase();
+
   return `KRYON-${stamp}-${suffix}`;
 }
 
 function saveOrder(order) {
-  const existing = JSON.parse(localStorage.getItem(storageKeys.orders) || "[]");
-  existing.unshift(order);
-  localStorage.setItem(storageKeys.orders, JSON.stringify(existing.slice(0, 12)));
-}
+  const existing = JSON.parse(
+    localStorage.getItem(storageKeys.orders) || "[]"
+  );
 
-function queueConfirmationEmail(order) {
-  if (!order.emailConfirmation || !order.customer.email) return false;
-  const email = {
-    id: `EMAIL-${order.id}`,
-    status: "queued",
-    to: order.customer.email,
-    subject: `KRYON order confirmation ${order.id}`,
-    createdAt: order.createdAt,
-    body: [
-      `Hi ${order.customer.name || "there"},`,
-      `Your KRYON order ${order.id} is confirmed.`,
-      `Total: ${formatPrice(order.total, order.currency)}`,
-      `Payment: ${order.paymentLabel}`,
-      `Ship to: ${order.customer.address}`,
-      "Thank you for reserving your recovery suite."
-    ].join("\n")
-  };
-  const outbox = JSON.parse(localStorage.getItem(storageKeys.emailOutbox) || "[]");
-  outbox.unshift(email);
-  localStorage.setItem(storageKeys.emailOutbox, JSON.stringify(outbox.slice(0, 20)));
-  return true;
+  existing.unshift(order);
+
+  localStorage.setItem(
+    storageKeys.orders,
+    JSON.stringify(existing.slice(0, 12))
+  );
 }
 
 function transition(work) {
@@ -218,20 +236,27 @@ function transition(work) {
     return;
   }
 
-  document.body.classList.add("transitioning");
+  document.body?.classList.add("transitioning");
+
   work();
-  window.setTimeout(() => document.body.classList.remove("transitioning"), 420);
+
+  window.setTimeout(() => {
+    document.body.classList.remove("transitioning");
+  }, 420);
 }
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
+
   localStorage.setItem(storageKeys.theme, theme);
 }
 
 function fillForm(form, values) {
   Object.entries(values).forEach(([key, value]) => {
     const field = form.elements[key];
+
     if (!field) return;
+
     if (field.type === "checkbox") {
       field.checked = Boolean(value);
       return;
@@ -241,23 +266,45 @@ function fillForm(form, values) {
 }
 
 function applyProfile() {
-  profileLabel.textContent = profile.name ? profile.name.split(" ")[0] : "Sign in";
-  fillForm(profileForm, profile);
-  fillForm(checkoutForm, {
-    name: profile.name,
-    countryCode: profile.countryCode,
-    phone: profile.phone,
-    email: profile.email,
-    address: profile.address,
-    language: profile.language,
-    currency: profile.currency,
-    theme: profile.theme,
-    emailConfirmations: profile.emailConfirmations,
-    emailConfirmation: profile.emailConfirmations,
-    authEmail: profile.email
-  });
-  document.documentElement.lang = profile.language || "en";
-  applyTheme(profile.theme || localStorage.getItem(storageKeys.theme) || "light");
+  if (profileLabel) {
+    profileLabel.textContent = profile.name
+      ? profile.name.split(" ")[0]
+      : "Sign in";
+  }
+
+  if (profileForm) {
+    fillForm(profileForm, profile);
+  }
+
+  if (checkoutForm) {
+    fillForm(checkoutForm, {
+      name: profile.name,
+      countryCode: profile.countryCode,
+      phone: profile.phone,
+      email: profile.email,
+      address: profile.address,
+      language: profile.language,
+      currency: profile.currency,
+      theme: profile.theme,
+      emailConfirmations:
+        profile.emailConfirmations,
+      emailConfirmation:
+        profile.emailConfirmations,
+      authEmail: profile.email
+    });
+  }
+
+  document.documentElement.lang =
+    profile.language || "en";
+
+  applyTheme(
+    profile.theme ||
+      localStorage.getItem(
+        storageKeys.theme
+      ) ||
+      "light"
+    );
+
   updateAllPrices();
 }
 
@@ -266,6 +313,15 @@ function updateAllPrices() {
     const key = node.dataset.productPrice;
     if (products[key]) node.textContent = formatPrice(products[key].price);
   });
+  const modalPrice = document.getElementById("product-price");
+  if (modalPrice) {
+    const activeKey =
+    document.getElementById("modal-add-cart")?.dataset.addCart;
+    if (products[activeKey]) {
+      modalPrice.textContent =
+      formatPrice(products[activeKey].price);
+    }
+  }
   updateCart();
   updateCheckoutSummary();
 }
@@ -321,10 +377,22 @@ function isValidExpiry(value) {
 function resetOtp() {
   otpCode = "";
   otpSent = false;
-  checkoutForm.elements.otp.value = "";
-  checkoutForm.elements.otp.disabled = true;
-  otpPanel.classList.remove("active");
-  otpStatus.textContent = "Add card details to request a verification code.";
+  otpCreatedAt = 0;
+
+  if (checkoutForm?.elements?.otp) {
+    checkoutForm.elements.otp.value = "";
+
+    checkoutForm.elements.otp.disabled = true;
+  }
+
+  if (otpPanel) {
+    otpPanel.classList.remove("active");
+  }
+
+  if (otpStatus) {
+    otpStatus.textContent =
+      "Add card details to request a verification code.";
+  }
 }
 
 function validateCardFields() {
@@ -341,17 +409,27 @@ function validateCardFields() {
 }
 
 function sendOtp() {
+
   const validationError = validateCardFields();
   if (validationError) {
     checkoutNote.textContent = validationError;
     return false;
   }
+  if (
+    otpSent &&
+    Date.now() - otpCreatedAt < 30000
+  ) {
+    checkoutNote.textContent =
+    "Please wait before requesting another OTP.";
+    return false;
+  }
 
   otpCode = String(Math.floor(100000 + Math.random() * 900000));
   otpSent = true;
+  otpCreatedAt = Date.now();
   checkoutForm.elements.otp.disabled = false;
   checkoutForm.elements.otp.focus();
-  otpPanel.classList.add("active");
+  otpPanel?.classList.add("active");
   otpStatus.textContent = `OTP sent to ${getFullPhone(new FormData(checkoutForm)) || "your phone"}. Prototype code: ${otpCode}`;
   checkoutNote.textContent = "Enter the 6-digit security code to confirm card payment.";
   return true;
@@ -373,7 +451,7 @@ function openProduct(key) {
     document.getElementById("modal-add-cart").dataset.addCart = key;
     productRender.className = `product-render ${product.render}`;
     productAura.style.background = `radial-gradient(circle, ${product.aura}, transparent 62%)`;
-    productView.classList.add("active");
+    productView?.classList.add("active");
     productView.setAttribute("aria-hidden", "false");
     document.body.style.overflow = "hidden";
   });
@@ -384,7 +462,7 @@ function closeProduct() {
     productView.classList.remove("active");
     productView.setAttribute("aria-hidden", "true");
     if (!cartView.classList.contains("active") && !checkoutView.classList.contains("active")) {
-      document.body.style.overflow = "";
+      document.body.style.removeProperty("overflow");
     }
   });
 }
@@ -394,10 +472,23 @@ function updateCart() {
   const count = entries.reduce((sum, [, quantity]) => sum + quantity, 0);
   const total = getCartTotal(entries);
 
-  cartCount.textContent = count;
-  cartTotal.textContent = formatPrice(total);
-  cartNote.textContent = entries.length === 0 ? "Add a product to reserve your suite." : "";
-  document.querySelector("[data-open-checkout]").disabled = entries.length === 0;
+  if (cartCount) {
+    cartCount.textContent = count;
+  }
+  if (cartTotal) {
+    cartTotal.textContent =
+    formatPrice(total);
+  }
+  if (cartNote) {
+    cartNote.textContent =
+    entries.length === 0
+    ? "Add a product to reserve your suite."
+    : "";
+  }
+  const checkoutButton = document.querySelector("[data-open-checkout]");
+  if (checkoutButton) {
+    checkoutButton.disabled = false;
+  }
 
   if (entries.length === 0) {
     cartItems.innerHTML = '<p class="empty-cart">Your cart is ready for a recovery ritual.</p>';
@@ -447,26 +538,75 @@ function updateCheckoutSummary() {
     .join("");
 }
 
+function updateCheckoutSummary() {
+  const entries = getCartEntries();
+
+  if (checkoutTotal) {
+    checkoutTotal.textContent =
+      formatPrice(getCartTotal(entries));
+  }
+
+  if (!checkoutItems) return;
+
+  if (entries.length === 0) {
+    checkoutItems.innerHTML =
+      '<p class="empty-cart">No items selected yet.</p>';
+
+    return;
+  }
+
+  checkoutItems.innerHTML = entries
+    .map(([key, quantity]) => {
+      const product = products[key];
+
+      return `
+        <article class="checkout-item">
+          <span>${quantity} x ${product.title}</span>
+          <strong>
+            ${formatPrice(
+              product.price * quantity
+            )}
+          </strong>
+        </article>
+      `;
+    })
+    .join("");
+}
+
 function addToCart(key) {
   if (!products[key]) return;
+
   cart[key] = (cart[key] || 0) + 1;
+
+  saveCart();
+
   updateCart();
   updateCheckoutSummary();
+
   productView.classList.remove("active");
+
   productView.setAttribute("aria-hidden", "true");
+
   openCart();
 }
 
 function decreaseCart(key) {
   if (!cart[key]) return;
+
   cart[key] -= 1;
-  if (cart[key] <= 0) delete cart[key];
+
+  if (cart[key] <= 0) {
+    delete cart[key];
+  }
+
+  saveCart();
+
   updateCart();
   updateCheckoutSummary();
 }
 
 function openCart() {
-  cartView.classList.add("active");
+  cartView?.classList.add("active");
   cartView.setAttribute("aria-hidden", "false");
   document.body.style.overflow = "hidden";
 }
@@ -475,13 +615,13 @@ function closeCart() {
   cartView.classList.remove("active");
   cartView.setAttribute("aria-hidden", "true");
   if (!productView.classList.contains("active") && !checkoutView.classList.contains("active") && !confirmationView.classList.contains("active")) {
-    document.body.style.overflow = "";
+    document.body.style.removeProperty("overflow");
   }
 }
 
 function openProfile() {
   fillForm(profileForm, profile);
-  profileView.classList.add("active");
+  profileView?.classList.add("active");
   profileView.setAttribute("aria-hidden", "false");
   document.body.style.overflow = "hidden";
 }
@@ -490,18 +630,42 @@ function closeProfile() {
   profileView.classList.remove("active");
   profileView.setAttribute("aria-hidden", "true");
   if (!cartView.classList.contains("active") && !checkoutView.classList.contains("active")) {
-    document.body.style.overflow = "";
+    document.body.style.removeProperty("overflow");
   }
 }
 
 function setCheckoutMode(mode) {
   checkoutMode = mode;
-  document.querySelectorAll(".mode-option").forEach(button => {
-    button.classList.toggle("active", button.dataset.mode === mode);
-  });
-  authFields.classList.toggle("visible", mode !== "guest");
-  passwordField.style.display = mode === "guest" ? "none" : "grid";
-  checkoutNote.textContent = mode === "guest" ? "Fast guest checkout. You can save a profile later." : "Your customer details will be saved locally for this prototype.";
+
+  document
+    .querySelectorAll(".mode-option")
+    .forEach(button => {
+      button.classList.toggle(
+        "active",
+        button.dataset.mode === mode
+      );
+    });
+
+  if (authFields) {
+    authFields.classList.toggle(
+      "visible",
+      mode !== "guest"
+    );
+  }
+
+  if (passwordField) {
+    passwordField.style.display =
+      mode === "guest"
+        ? "none"
+        : "grid";
+  }
+
+  if (checkoutNote) {
+    checkoutNote.textContent =
+      mode === "guest"
+        ? "Fast guest checkout. You can save a profile later."
+        : "Your customer details will be saved locally for this prototype.";
+  }
 }
 
 function openCheckout() {
@@ -524,7 +688,7 @@ function openCheckout() {
   updateCheckoutSummary();
   resetOtp();
   closeCart();
-  checkoutView.classList.add("active");
+  checkoutView?.classList.add("active");
   checkoutView.setAttribute("aria-hidden", "false");
   document.body.style.overflow = "hidden";
 }
@@ -533,24 +697,57 @@ function closeCheckout() {
   checkoutView.classList.remove("active");
   checkoutView.setAttribute("aria-hidden", "true");
   if (!cartView.classList.contains("active") && !confirmationView.classList.contains("active")) {
-    document.body.style.overflow = "";
+    document.body.style.removeProperty("overflow");
   }
 }
 
 function updatePaymentState() {
-  const payment = new FormData(checkoutForm).get("payment") || "card";
-  cardFields.classList.toggle("hidden", payment !== "card");
-  otpPanel.classList.toggle("hidden", payment !== "card");
-  if (payment !== "card") resetOtp();
-  document.querySelectorAll(".payment-option").forEach(option => {
-    option.classList.toggle("active", option.querySelector("input").checked);
-  });
+  if (!checkoutForm) return;
+
+  const payment =
+    new FormData(checkoutForm).get("payment") ||
+    "card";
+
+  if (cardFields) {
+    cardFields.classList.toggle(
+      "hidden",
+      payment !== "card"
+    );
+  }
+
+  if (otpPanel) {
+    otpPanel.classList.toggle(
+      "hidden",
+      payment !== "card"
+    );
+  }
+
+  if (payment !== "card") {
+    resetOtp();
+  }
+
+  document
+    .querySelectorAll(".payment-option")
+    .forEach(option => {
+      const input =
+        option.querySelector("input");
+
+      option.classList.toggle(
+        "active",
+        input?.checked
+      );
+    });
 }
 
 function openConfirmation(order) {
   confirmationId.textContent = order.id;
-  confirmationTotal.textContent = formatPrice(order.total, order.currency);
-  confirmationCopy.textContent = `Confirmed ${order.createdAt}. Payment selected: ${order.paymentLabel}. ${order.emailQueued ? "Confirmation email queued for " + order.customer.email + "." : "Email confirmation was not requested."}`;
+
+  confirmationTotal.textContent =
+    formatPrice(order.total, order.currency);
+
+  confirmationCopy.textContent =
+    `Order confirmed on ${order.createdAt}. Payment method: ${order.paymentLabel}.`;
+
   confirmationItems.innerHTML = order.items
     .map(item => `
       <article class="confirmation-item">
@@ -559,8 +756,11 @@ function openConfirmation(order) {
       </article>
     `)
     .join("");
-  confirmationView.classList.add("active");
+
+  confirmationView?.classList.add("active");
+
   confirmationView.setAttribute("aria-hidden", "false");
+
   document.body.style.overflow = "hidden";
 }
 
@@ -568,7 +768,7 @@ function closeConfirmation() {
   confirmationView.classList.remove("active");
   confirmationView.setAttribute("aria-hidden", "true");
   if (!cartView.classList.contains("active") && !productView.classList.contains("active") && !checkoutView.classList.contains("active")) {
-    document.body.style.overflow = "";
+    document.body.style.removeProperty("overflow");
   }
 }
 
@@ -590,6 +790,16 @@ function checkout(formData) {
     currency: formData.get("currency"),
     emailConfirmation: formData.get("emailConfirmation") === "on"
   };
+  if (
+    !customer.name ||
+    !customer.email ||
+    !customer.phone ||
+    !customer.address
+  ) {
+    checkoutNote.textContent =
+    "Please complete all required fields.";
+    return;
+  }
 
   const payment = formData.get("payment") || "card";
   if (payment === "card") {
@@ -600,6 +810,14 @@ function checkout(formData) {
     }
     if (!otpSent) {
       sendOtp();
+      checkoutNote.textContent =
+      "Verification code sent. Enter the OTP to continue.";
+      return;
+    }
+    if (Date.now() - otpCreatedAt > 120000) {
+      checkoutNote.textContent =
+      "OTP expired. Request a new code.";
+      resetOtp();
       return;
     }
     if (digitsOnly(formData.get("otp")) !== otpCode) {
@@ -642,10 +860,9 @@ function checkout(formData) {
     total: getCartTotal(entries)
   };
 
-  const emailQueued = queueConfirmationEmail(order);
-  order.emailQueued = emailQueued;
   saveOrder(order);
   Object.keys(cart).forEach(key => delete cart[key]);
+  saveCart();
   updateCart();
   updateCheckoutSummary();
   resetOtp();
@@ -689,11 +906,15 @@ document.addEventListener("click", event => {
   if (modeButton) setCheckoutMode(modeButton.dataset.mode);
   if (closeConfirmationButton) closeConfirmation();
   if (resendOtpButton) sendOtp();
-
   if (signOutButton) {
     localStorage.setItem(storageKeys.session, "guest");
-    profileStatus.textContent = "Signed out for this prototype session.";
+    profile = {
+      ...defaultProfile
+    };
     profileLabel.textContent = "Sign in";
+    profileStatus.textContent =
+    "Signed out for this prototype session.";
+    closeProfile();
   }
 });
 
@@ -706,94 +927,227 @@ document.addEventListener("keydown", event => {
   if (confirmationView.classList.contains("active")) closeConfirmation();
 });
 
-profileForm.addEventListener("submit", event => {
-  event.preventDefault();
-  const formData = new FormData(profileForm);
-  saveProfile({
-    name: formData.get("name").trim(),
-    email: formData.get("email").trim(),
-    countryCode: formData.get("countryCode"),
-    phone: digitsOnly(formData.get("phone")),
-    address: formData.get("address").trim(),
-    country: formData.get("country").trim(),
-    language: formData.get("language"),
-    currency: formData.get("currency"),
-    theme: formData.get("theme"),
-    emailConfirmations: formData.get("emailConfirmations") === "on"
-  });
-  profileStatus.textContent = "Profile, address, language, currency, email preference, and appearance saved.";
-});
+if (profileForm) {
+  profileForm.addEventListener("submit", event => {
+    event.preventDefault();
 
-checkoutForm.addEventListener("submit", event => {
-  event.preventDefault();
-  checkout(new FormData(checkoutForm));
-});
+    const formData = new FormData(profileForm);
 
-checkoutForm.addEventListener("change", event => {
-  if (event.target.name === "payment") updatePaymentState();
-  if (["cardholder", "cardNumber", "expiry", "cvv", "phone"].includes(event.target.name)) resetOtp();
-  if (event.target.name === "countryCode") resetOtp();
-  if (event.target.name === "currency" || event.target.name === "language") {
-    profile = { ...profile, currency: checkoutForm.elements.currency.value, language: checkoutForm.elements.language.value };
-    applyProfile();
-    fillForm(checkoutForm, {
-      ...Object.fromEntries(new FormData(checkoutForm).entries()),
-      currency: profile.currency,
-      language: profile.language
+    saveProfile({
+      name: formData.get("name").trim(),
+      email: formData.get("email").trim(),
+      countryCode: formData.get("countryCode"),
+      phone: digitsOnly(formData.get("phone")),
+      address: formData.get("address").trim(),
+      country: formData.get("country").trim(),
+      language: formData.get("language"),
+      currency: formData.get("currency"),
+      theme: formData.get("theme"),
+      emailConfirmations:
+        formData.get("emailConfirmations") === "on"
     });
-  }
-});
 
-
-
-checkoutForm.addEventListener("input", event => {
-  if (event.target.name === "cardNumber") {
-    event.target.value = formatCardNumber(event.target.value);
-    resetOtp();
-  }
-  if (event.target.name === "expiry") {
-    event.target.value = formatExpiry(event.target.value);
-    resetOtp();
-  }
-  if (event.target.name === "cvv") {
-    event.target.value = digitsOnly(event.target.value).slice(0, 4);
-    resetOtp();
-  }
-  if (event.target.name === "otp") {
-    event.target.value = digitsOnly(event.target.value).slice(0, 6);
-  }
-  if (event.target.name === "phone") {
-    event.target.value = digitsOnly(event.target.value).slice(0, 14);
-  }
-});
-
-profileForm.addEventListener("input", event => {
-  if (event.target.name === "phone") {
-    event.target.value = digitsOnly(event.target.value).slice(0, 14);
-  }
-});
-
-document.querySelectorAll(".goal").forEach(button => {
-  button.addEventListener("click", () => {
-    const goal = goals[button.dataset.goal];
-    if (!goal) return;
-
-    document.querySelectorAll(".goal").forEach(item => item.classList.remove("active"));
-    button.classList.add("active");
-
-    transition(() => {
-      document.getElementById("result-title").textContent = goal.title;
-      document.getElementById("result-copy").textContent = goal.copy;
-      document.getElementById("result-button").dataset.openProduct = goal.product;
-    });
+    if (profileStatus) {
+      profileStatus.textContent =
+        "Profile, address, language, currency, email preference, and appearance saved.";
+    }
   });
-});
+}
+
+
+
+if (checkoutForm) {
+  checkoutForm.addEventListener("submit", event => {
+    event.preventDefault();
+
+    checkout(new FormData(checkoutForm));
+  });
+
+  checkoutForm.addEventListener("change", event => {
+    if (event.target.name === "payment") {
+      updatePaymentState();
+    }
+
+    if (
+      [
+        "cardholder",
+        "cardNumber",
+        "expiry",
+        "cvv",
+        "phone"
+      ].includes(event.target.name)
+    ) {
+      resetOtp();
+    }
+
+    if (event.target.name === "countryCode") {
+      resetOtp();
+    }
+
+    if (
+      event.target.name === "currency" ||
+      event.target.name === "language"
+    ) {
+      profile = {
+        ...profile,
+        currency: checkoutForm.elements.currency.value,
+        language: checkoutForm.elements.language.value
+      };
+
+      applyProfile();
+
+      fillForm(checkoutForm, {
+        ...Object.fromEntries(
+          new FormData(checkoutForm).entries()
+        ),
+        currency: profile.currency,
+        language: profile.language
+      });
+    }
+  });
+
+  checkoutForm.addEventListener("input", event => {
+    if (event.target.name === "cardNumber") {
+      event.target.value =
+        formatCardNumber(event.target.value);
+
+      resetOtp();
+    }
+
+    if (event.target.name === "expiry") {
+      event.target.value =
+        formatExpiry(event.target.value);
+
+      resetOtp();
+    }
+
+    if (event.target.name === "cvv") {
+      event.target.value =
+        digitsOnly(event.target.value).slice(0, 4);
+
+      resetOtp();
+    }
+
+    if (event.target.name === "otp") {
+      event.target.value =
+        digitsOnly(event.target.value).slice(0, 6);
+    }
+
+    if (event.target.name === "phone") {
+      event.target.value =
+        digitsOnly(event.target.value).slice(0, 14);
+    }
+  });
+}
+
+if (profileForm) {
+  profileForm.addEventListener("submit", event => {
+    event.preventDefault();
+
+    const formData = new FormData(profileForm);
+
+    saveProfile({
+      name: formData.get("name").trim(),
+      email: formData.get("email").trim(),
+      countryCode: formData.get("countryCode"),
+      phone: digitsOnly(formData.get("phone")),
+      address: formData.get("address").trim(),
+      country: formData.get("country").trim(),
+      language: formData.get("language"),
+      currency: formData.get("currency"),
+      theme: formData.get("theme"),
+      emailConfirmations:
+        formData.get("emailConfirmations") === "on"
+    });
+
+    if (profileStatus) {
+      profileStatus.textContent =
+        "Profile, address, language, currency, email preference, and appearance saved.";
+    }
+  });
+
+  profileForm.addEventListener("input", event => {
+    if (event.target.name === "phone") {
+      event.target.value =
+        digitsOnly(event.target.value).slice(0, 14);
+    }
+  });
+}
 
 function updateProgress() {
-  const max = document.documentElement.scrollHeight - window.innerHeight;
-  const progress = max > 0 ? window.scrollY / max : 0;
-  document.querySelector(".progress").style.width = `${Math.min(progress * 100, 100)}%`;
+  const max =
+    document.documentElement.scrollHeight -
+    window.innerHeight;
+
+  const progress =
+    max > 0 ? window.scrollY / max : 0;
+
+  if (progressBar) {
+    progressBar.style.width =
+      `${Math.min(progress * 100, 100)}%`;
+  }
 }
+const finderRecommendations = {
+  energy: {
+    title: "KRYON Red",
+    copy:
+      "Begin with a full-body red light session to support circulation, warmth, and daily cellular energy.",
+    product: "red"
+  },
+
+  tension: {
+    title: "KRYON Align",
+    copy:
+      "Focus on posture correction, mobility flow, and guided alignment to reduce physical tension.",
+    product: "align"
+  },
+
+  travel: {
+    title: "KRYON Red Portable",
+    copy:
+      "Portable targeted recovery light designed for travel routines and smaller recovery zones.",
+    product: "portable"
+  },
+
+  sleep: {
+    title: "KRYON Sleep",
+    copy:
+      "Create a softer nighttime ritual to help the nervous system downshift before rest.",
+    product: "sleep"
+  }
+};
+const resultTitle =
+document.getElementById("result-title");
+
+const resultCopy =
+document.getElementById("result-copy");
+
+const resultButton =
+document.getElementById("result-button");
+
+document.querySelectorAll(".goal")
+.forEach(button => {
+  button.addEventListener("click", () => {
+    document.querySelectorAll(".goal")
+    .forEach(goal => {
+      goal.classList.remove("active");
+    });
+    
+    button.classList.add("active");
+    const goal =
+    button.dataset.goal;
+    
+    const recommendation =
+    finderRecommendations[goal];
+    
+    if (!recommendation) return;
+    resultTitle.textContent = recommendation.title;
+    
+    resultCopy.textContent = recommendation.copy;
+    
+    resultButton.dataset.openProduct = recommendation.product;
+  });
+});
 
 window.addEventListener("scroll", updateProgress, { passive: true });
 window.addEventListener("resize", updateProgress);
